@@ -10,6 +10,8 @@ PILOT_ACCELERATION = 0.04;
           , backward = 's'
           , left     = 'a'
           , right    = 'd'
+          , flip     = 'f'
+          , channel  = 'c'
           ;
         if      (options && options.keyboard === 'qwerty') { }
         else if (options && options.keyboard === 'azerty') {
@@ -52,6 +54,10 @@ PILOT_ACCELERATION = 0.04;
           69 : {
             ev : 'drone',
             action : 'disableEmergency'
+          },
+          70 : {
+            ev : 'animate',
+            action : 'flip'
           }
         };
         Keymap[keyCodeMap[forward]]  = {
@@ -70,7 +76,9 @@ PILOT_ACCELERATION = 0.04;
           ev : 'move',
           action : 'right'
         };
-
+        Keymap[keyCodeMap[channel]]  = {
+          ev : 'channel'
+        };
 
         /*
          * Constructuor
@@ -79,7 +87,12 @@ PILOT_ACCELERATION = 0.04;
                 console.log("Loading Pilot plugin.");
                 this.cockpit = cockpit;
                 this.speed = 0;
+                this.moving = false;
                 this.keys = {};
+
+                // Add the buttons to the control area
+                $('#controls').append('<input type="button" id="ftrim" value="Flat trim">');
+                $('#controls').append('<input type="button" id="calibratemagneto" value="Calibrate magneto">');
 
                 // Start with magneto calibration disabled.
                 $('#calibratemagneto').prop('disabled', true);
@@ -109,11 +122,17 @@ PILOT_ACCELERATION = 0.04;
                   ev.preventDefault();
                   pilot.calibrate(0);
                 });
+                $('#ftrim').click(function(ev) {
+                  ev.preventDefault();
+                  pilot.ftrim();
+                });
                 this.cockpit.socket.on('hovering', function() {
                   $('#calibratemagneto').prop('disabled', false);
+                  $('#ftrim').prop('disabled', true);
                 });
                 this.cockpit.socket.on('landed', function() {
                   $('#calibratemagneto').prop('disabled', true);
+                  $('#ftrim').prop('disabled', false);
                 });
 
 
@@ -127,19 +146,47 @@ PILOT_ACCELERATION = 0.04;
          */
         Pilot.prototype.keyDown = function keyDown(ev) {
                 console.log("Keydown: " + ev.keyCode);
+                if (ev.keyCode == 9) {
+                  PILOT_ACCELERATION = (PILOT_ACCELERATION == 0.04) ? 0.64 : 0.04;
+                  console.log("PILOT_ACCELERATION: " + PILOT_ACCELERATION);
+                  ev.preventDefault();
+                  return;
+                }
                 if (Keymap[ev.keyCode] == null) {
                         return;
                 }
                 ev.preventDefault();
-                
+
                 var key = ev.keyCode;
                 var cmd = Keymap[key];
+                //if flip, determine which direction to flip
+                var regFlip = /^flip/;
+                if (regFlip.test(cmd.action)) {
+                  console.log("FLIP!");
+                  //check for which direction to flip
+                  switch (this.moving) {
+                    case 'front':
+                      cmd.action = 'flipAhead';
+                      break;
+                    case 'back':
+                      cmd.action = 'flipBehind';
+                      break;
+                    case 'right':
+                      cmd.action = 'flipRight';
+                      break;
+                    default:
+                      cmd.action = 'flipLeft';
+                      break;
+                  }
+
+                }
                 // If a motion command, we just update the speed
                 if (cmd.ev == "move") {
+                    this.moving = Keymap[ev.keyCode].action;
                     if (typeof(this.keys[key])=='undefined' || this.keys[key]===null) {
                         this.keys[key] = PILOT_ACCELERATION;
                     }
-                } 
+                }
                 // Else we send the command immediately
                 else {
                     this.cockpit.socket.emit("/pilot/" + cmd.ev, {
@@ -158,7 +205,7 @@ PILOT_ACCELERATION = 0.04;
                         return;
                 }
                 ev.preventDefault();
-                
+
                 // Delete the key from the tracking array
                 var key = ev.keyCode;
                 delete this.keys[key];
@@ -176,7 +223,7 @@ PILOT_ACCELERATION = 0.04;
                   });
                 }
         }
-           
+
         /*
          * Triggered by a timer, check for active keys
          * and send the appropriate motion commands
@@ -189,7 +236,7 @@ PILOT_ACCELERATION = 0.04;
                         action : cmd.action,
                         speed : this.keys[k]
                     });
-                    
+
                     // Update the speed
                     this.keys[k] = this.keys[k] + PILOT_ACCELERATION / (1 - this.keys[k]);
                     this.keys[k] = Math.min(1, this.keys[k]);
@@ -205,6 +252,14 @@ PILOT_ACCELERATION = 0.04;
                         device_num : 0
                 });
         };
+
+        /*
+         * Requests a flat trim. Disabled when flying.
+         */
+        Pilot.prototype.ftrim = function ftrim() {
+                this.cockpit.socket.emit("/pilot/ftrim");
+        };
+
 
         window.Cockpit.plugins.push(Pilot);
 
